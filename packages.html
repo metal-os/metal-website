@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="asterOS packages">
+    <title>Packages | asterOS</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div id="wrapper">
+        <header id="header">
+            <div class="logo">
+                <a href="/">asterOS</a>
+            </div>
+            <input type="checkbox" id="menu-toggle-cb">
+            <label id="menu-toggle" for="menu-toggle-cb">
+                <s class="bar"></s><s class="bar"></s><s class="bar"></s>
+            </label>
+            <div class="menu-wrapper">
+                <nav class="menu-local">
+                    <ul>
+                        <li><a href="index.html#about">About</a></li>
+                        <li><a href="index.html#download">Downloads</a></li>
+                        <li><a href="index.html#changes">Changes</a></li>
+                        <li><a href="packages.html">Packages</a></li>
+                        <li><a href="https://github.com/metal-os" target="_blank" rel="noopener">Git</a></li>
+                        <li><a href="#">Docs</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </header>
+
+        <div id="content">
+            <div class="pure-g">
+                <div class="pure-u-1">
+                    <div class="l-box">
+                        <h2>Packages</h2>
+                        <p>
+                            Packages are read from the asterOS repositories on GitHub.
+                            Select architecture and channel, then load the index.
+                        </p>
+
+                        <form class="dl-form pkg-filters" id="filters">
+                            <div class="field">
+                                <label for="arch">Architecture</label>
+                                <select id="arch" name="arch">
+                                    <option value="x86_64">x86_64</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="channel">Channel</label>
+                                <select id="channel" name="channel">
+                                    <option value="metal">metal (stable)</option>
+                                    <option value="metal-edge">metal-edge</option>
+                                    <option value="space">space (stable)</option>
+                                    <option value="space-edge">space-edge</option>
+                                </select>
+                            </div>
+                        </form>
+
+                        <div id="pkg-status" class="pkg-status"></div>
+                        <div id="pkg-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            &copy; 2026 asterOS Development Team
+        </footer>
+    </div>
+
+    <script>
+    (function () {
+        const CHANNEL_MAP = {
+            "metal":       { repo: "metal-packages",       path: "x86_64/stable" },
+            "metal-edge":  { repo: "metal-packages",       path: "x86_64/edge" },
+            "space":       { repo: "metal-packages-space", path: "x86_64/stable" },
+            "space-edge":  { repo: "metal-packages-space", path: "x86_64/edge" }
+        };
+
+        const statusEl = document.getElementById("pkg-status");
+        const listEl = document.getElementById("pkg-list");
+        const form = document.getElementById("filters");
+
+        function setStatus(msg, isError) {
+            statusEl.textContent = msg;
+            statusEl.className = "pkg-status" + (isError ? " error" : "");
+        }
+
+        // Minimal TOML parser for index.toml (tables + simple string/quoted values)
+        function parseIndexToml(text) {
+            const packages = [];
+            let current = null;
+            const lines = text.split(/\r?\n/);
+
+            for (let i = 0; i < lines.length; i++) {
+                let line = lines[i].trim();
+                if (!line || line.startsWith("#")) continue;
+
+                const tableMatch = line.match(/^\[([^\]]+)\]$/);
+                if (tableMatch) {
+                    const key = tableMatch[1].trim();
+                    if (key === "metadata") {
+                        current = null;
+                        continue;
+                    }
+                    // [name."version-rev"] or [name.version]
+                    const m = key.match(/^(.+?)\.\"([^\"]+)\"$/) || key.match(/^(.+?)\.([^\s\]]+)$/);
+                    if (m) {
+                        current = {
+                            name: m[1],
+                            version: m[2],
+                            arch: "",
+                            description: "",
+                            license: "",
+                            binary: "",
+                            recipe: "",
+                            depends: "",
+                            status: ""
+                        };
+                        packages.push(current);
+                    } else {
+                        current = null;
+                    }
+                    continue;
+                }
+
+                if (!current) continue;
+
+                const kv = line.match(/^(\w+)\s*=\s*(.+)$/);
+                if (!kv) continue;
+                let val = kv[2].trim();
+                if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                    val = val.slice(1, -1);
+                }
+                const field = kv[1];
+                if (field in current) current[field] = val;
+            }
+            return packages;
+        }
+
+        function renderPackages(pkgs, baseUrl) {
+            if (!pkgs.length) {
+                listEl.innerHTML = "<p>No packages found in this index.</p>";
+                return;
+            }
+
+            // group by name
+            const byName = {};
+            pkgs.forEach(function (p) {
+                if (!byName[p.name]) byName[p.name] = [];
+                byName[p.name].push(p);
+            });
+
+            const names = Object.keys(byName).sort();
+            let html = '<table class="pkg-table"><thead><tr>' +
+                "<th>Package</th><th>Version</th><th>Description</th><th>License</th><th></th>" +
+                "</tr></thead><tbody>";
+
+            names.forEach(function (name) {
+                byName[name].forEach(function (p, idx) {
+                    const ver = p.version;
+                    const mpkg = name + "-" + ver + ".mpkg";
+                    const recipe = name + "-" + ver + ".recipe.toml";
+                    const dl = baseUrl + mpkg;
+                    const rec = baseUrl + recipe;
+                    html += "<tr>" +
+                        "<td>" + (idx === 0 ? "<strong>" + name + "</strong>" : "") + "</td>" +
+                        "<td><code>" + ver + "</code></td>" +
+                        "<td>" + (p.description || "—") + "</td>" +
+                        "<td>" + (p.license || "—") + "</td>" +
+                        "<td class=\"pkg-actions\">" +
+                            "<a href=\"" + dl + "\">.mpkg</a> · " +
+                            "<a href=\"" + rec + "\">recipe</a>" +
+                        "</td></tr>";
+                });
+            });
+
+            html += "</tbody></table>";
+            listEl.innerHTML = html;
+        }
+
+        function load() {
+            const channel = document.getElementById("channel").value;
+            const info = CHANNEL_MAP[channel];
+            if (!info) {
+                setStatus("Failed to gather information.", true);
+                listEl.innerHTML = "";
+                return;
+            }
+
+            const base = "https://raw.githubusercontent.com/metal-os/" +
+                info.repo + "/main/" + info.path + "/";
+            const indexUrl = base + "index.toml";
+
+            setStatus("Loading " + indexUrl + " …");
+            listEl.innerHTML = "";
+
+            fetch(indexUrl)
+                .then(function (res) {
+                    if (!res.ok) {
+                        throw new Error("HTTP " + res.status);
+                    }
+                    return res.text();
+                })
+                .then(function (text) {
+                    const pkgs = parseIndexToml(text);
+                    setStatus(
+                        "Loaded " + pkgs.length + " package version(s) from " +
+                        info.repo + " / " + info.path
+                    );
+                    renderPackages(pkgs, base);
+                })
+                .catch(function () {
+                    setStatus("Failed to gather information.", true);
+                    listEl.innerHTML = "";
+                });
+        }
+
+        document.getElementById("arch").addEventListener("change", load);
+        document.getElementById("channel").addEventListener("change", load);
+
+        // initial load
+        load();
+    })();
+    </script>
+</body>
+</html>
